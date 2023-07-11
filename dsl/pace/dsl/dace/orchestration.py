@@ -68,7 +68,7 @@ def _download_results_from_dace(
             gt4py_results = [
                 gt4py.storage.from_array(
                     r,
-                    default_origin=(0, 0, 0),
+                    #default_origin=(0, 0, 0),
                     backend=config.get_backend(),
                     managed_memory=True,
                 )
@@ -77,7 +77,9 @@ def _download_results_from_dace(
         else:
             gt4py_results = [
                 gt4py.storage.from_array(
-                    r, default_origin=(0, 0, 0), backend=config.get_backend()
+                    r,
+                    #default_origin=(0, 0, 0),
+                    backend=config.get_backend()
                 )
                 for r in dace_result
             ]
@@ -160,6 +162,10 @@ def _build_sdfg(
         # Perform pre-expansion fine tuning
         with DaCeProgress(config, "Split regions"):
             splittable_region_expansion(sdfg, verbose=True)
+
+        with DaCeProgress(config, "Expand (partial expansion)"):
+            from gt4py.cartesian.gtc.dace.partial_expansion import partially_expand     
+            partially_expand(sdfg, dims="K")
 
         # Expand the stencil computation Library Nodes with the right expansion
         with DaCeProgress(config, "Expand"):
