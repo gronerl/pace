@@ -207,9 +207,9 @@ def fill_corners_delp_pt_w(
     delp_in: FloatField,
     pt_in: FloatField,
     w_in: FloatField,
-    delp_out: FloatField,
-    pt_out: FloatField,
-    w_out: FloatField,
+    # delp_out: FloatField,
+    # pt_out: FloatField,
+    # w_out: FloatField,
 ):
     """
     Args:
@@ -223,9 +223,13 @@ def fill_corners_delp_pt_w(
     from __externals__ import fill_corners_func
 
     with computation(PARALLEL), interval(...):
-        delp_out = fill_corners_func(delp_in)
-        pt_out = fill_corners_func(pt_in)
-        w_out = fill_corners_func(w_in)
+        tmp_delp = fill_corners_func(delp_in)
+        tmp_pt = fill_corners_func(pt_in)
+        tmp_w = fill_corners_func(w_in)
+    with computation(PARALLEL), interval(...):
+        delp_in = tmp_delp
+        pt_in = tmp_pt
+        w_in = tmp_w
 
 
 def compute_nonhydrostatic_fluxes_x(
@@ -691,13 +695,13 @@ class CGridShallowWaterDynamics:
         )
 
         # TODO(eddied): We pass the same fields 2x to avoid GTC validation errors
-        self._fill_corners_x_delp_pt_w_stencil(delp, pt, w, delp, pt, w)
+        self._fill_corners_x_delp_pt_w_stencil(delp, pt, w)#, delp, pt, w)
         # TODO: why is there only a "x" version of this? Is the "y" verison folded
         # into the next routine?
         self._compute_nonhydro_fluxes_x_stencil(
             delp, pt, ut, w, self._tmp_fx, self._tmp_fx1, self._tmp_fx2
         )
-        self._fill_corners_y_delp_pt_w_stencil(delp, pt, w, delp, pt, w)
+        self._fill_corners_y_delp_pt_w_stencil(delp, pt, w)#, delp, pt, w)
         self._transportdelp_updatevorticity_and_ke(
             delp,
             pt,

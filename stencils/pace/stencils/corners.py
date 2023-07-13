@@ -56,7 +56,9 @@ class CopyCorners:
         Fills cell quantity field using corners from itself and multipliers
         in the dirction specified initialization of the instance of this class.
         """
-        self._copy_corners(field, field)
+        self._copy_corners(field,
+                           # field
+                           )
 
 
 class CopyCornersXY:
@@ -111,7 +113,9 @@ class CopyCornersXY:
         # we could avoid aliasing field for the x-differenceable output, but this
         # requires selectively validating the halos, since the Fortran code does the
         # final (x-direction) corners copy directly on the base field
-        self._copy_corners_xy(field, field, self._y_field)
+        self._copy_corners_xy(field,
+                              # field,
+                              self._y_field)
         return field, self._y_field
 
 
@@ -167,15 +171,20 @@ def fill_corners_2cells_mult_x(
     return q
 
 
-def fill_corners_2cells_x_stencil(q_out: FloatField, q_in: FloatField):
+def fill_corners_2cells_x_stencil(#q_out: FloatField,
+                                  q_in: FloatField):
     with computation(PARALLEL), interval(...):
-        q_out = fill_corners_2cells_mult_x(q_out, q_in, 1.0, 1.0, 1.0, 1.0)
-
-
-def fill_corners_2cells_y_stencil(q_out: FloatField, q_in: FloatField):
+        q_out = fill_corners_2cells_mult_x(q_in, q_in, 1.0, 1.0, 1.0, 1.0)
     with computation(PARALLEL), interval(...):
-        q_out = fill_corners_2cells_mult_y(q_out, q_in, 1.0, 1.0, 1.0, 1.0)
+        q_in = q_out
 
+
+def fill_corners_2cells_y_stencil(#q_out: FloatField,
+                                  q_in: FloatField):
+    with computation(PARALLEL), interval(...):
+        q_out = fill_corners_2cells_mult_y(q_in, q_in, 1.0, 1.0, 1.0, 1.0)
+    with computation(PARALLEL), interval(...):
+        q_in = q_out
 
 @gtscript.function
 def fill_corners_2cells_x(q: FloatField):
@@ -304,188 +313,198 @@ def fill_corners_3cells_mult_y(
     return q
 
 
-def copy_corners_x_stencil_defn(q_in: FloatField, q_out: FloatField):
+def copy_corners_x_stencil_defn(q_in: FloatField):# q_out: FloatField):
     from __externals__ import i_end, i_start, j_end, j_start
 
     with computation(PARALLEL), interval(...):
+        tmp_q = q_in
         with horizontal(
             region[i_start - 3, j_start - 3], region[i_end + 3, j_start - 3]
         ):
-            q_out = q_in[0, 5, 0]
+            tmp_q = q_in[0, 5, 0]
         with horizontal(
             region[i_start - 2, j_start - 3], region[i_end + 3, j_start - 2]
         ):
-            q_out = q_in[-1, 4, 0]
+            tmp_q = q_in[-1, 4, 0]
         with horizontal(
             region[i_start - 1, j_start - 3], region[i_end + 3, j_start - 1]
         ):
-            q_out = q_in[-2, 3, 0]
+            tmp_q = q_in[-2, 3, 0]
         with horizontal(
             region[i_start - 3, j_start - 2], region[i_end + 2, j_start - 3]
         ):
-            q_out = q_in[1, 4, 0]
+            tmp_q = q_in[1, 4, 0]
         with horizontal(
             region[i_start - 2, j_start - 2], region[i_end + 2, j_start - 2]
         ):
-            q_out = q_in[0, 3, 0]
+            tmp_q = q_in[0, 3, 0]
         with horizontal(
             region[i_start - 1, j_start - 2], region[i_end + 2, j_start - 1]
         ):
-            q_out = q_in[-1, 2, 0]
+            tmp_q = q_in[-1, 2, 0]
         with horizontal(
             region[i_start - 3, j_start - 1], region[i_end + 1, j_start - 3]
         ):
-            q_out = q_in[2, 3, 0]
+            tmp_q = q_in[2, 3, 0]
         with horizontal(
             region[i_start - 2, j_start - 1], region[i_end + 1, j_start - 2]
         ):
-            q_out = q_in[1, 2, 0]
+            tmp_q = q_in[1, 2, 0]
         with horizontal(
             region[i_start - 1, j_start - 1], region[i_end + 1, j_start - 1]
         ):
-            q_out = q_in[0, 1, 0]
+            tmp_q = q_in[0, 1, 0]
         with horizontal(region[i_start - 3, j_end + 1], region[i_end + 1, j_end + 3]):
-            q_out = q_in[2, -3, 0]
+            tmp_q = q_in[2, -3, 0]
         with horizontal(region[i_start - 2, j_end + 1], region[i_end + 1, j_end + 2]):
-            q_out = q_in[1, -2, 0]
+            tmp_q = q_in[1, -2, 0]
         with horizontal(region[i_start - 1, j_end + 1], region[i_end + 1, j_end + 1]):
-            q_out = q_in[0, -1, 0]
+            tmp_q = q_in[0, -1, 0]
         with horizontal(region[i_start - 3, j_end + 2], region[i_end + 2, j_end + 3]):
-            q_out = q_in[1, -4, 0]
+            tmp_q = q_in[1, -4, 0]
         with horizontal(region[i_start - 2, j_end + 2], region[i_end + 2, j_end + 2]):
-            q_out = q_in[0, -3, 0]
+            tmp_q = q_in[0, -3, 0]
         with horizontal(region[i_start - 1, j_end + 2], region[i_end + 2, j_end + 1]):
-            q_out = q_in[-1, -2, 0]
+            tmp_q = q_in[-1, -2, 0]
         with horizontal(region[i_start - 3, j_end + 3], region[i_end + 3, j_end + 3]):
-            q_out = q_in[0, -5, 0]
+            tmp_q = q_in[0, -5, 0]
         with horizontal(region[i_start - 2, j_end + 3], region[i_end + 3, j_end + 2]):
-            q_out = q_in[-1, -4, 0]
+            tmp_q = q_in[-1, -4, 0]
         with horizontal(region[i_start - 1, j_end + 3], region[i_end + 3, j_end + 1]):
-            q_out = q_in[-2, -3, 0]
+            tmp_q = q_in[-2, -3, 0]
+    with computation(PARALLEL), interval(...):
+        q_in = tmp_q
 
-
-def copy_corners_y_stencil_defn(q_in: FloatField, q_out: FloatField):
+def copy_corners_y_stencil_defn(q_in: FloatField):# q_out: FloatField):
     from __externals__ import i_end, i_start, j_end, j_start
 
     with computation(PARALLEL), interval(...):
+        tmp_q = q_in
         with horizontal(
             region[i_start - 3, j_start - 3], region[i_start - 3, j_end + 3]
         ):
-            q_out = q_in[5, 0, 0]
+            tmp_q = q_in[5, 0, 0]
         with horizontal(
             region[i_start - 2, j_start - 3], region[i_start - 3, j_end + 2]
         ):
-            q_out = q_in[4, 1, 0]
+            tmp_q = q_in[4, 1, 0]
         with horizontal(
             region[i_start - 1, j_start - 3], region[i_start - 3, j_end + 1]
         ):
-            q_out = q_in[3, 2, 0]
+            tmp_q = q_in[3, 2, 0]
         with horizontal(
             region[i_start - 3, j_start - 2], region[i_start - 2, j_end + 3]
         ):
-            q_out = q_in[4, -1, 0]
+            tmp_q = q_in[4, -1, 0]
         with horizontal(
             region[i_start - 2, j_start - 2], region[i_start - 2, j_end + 2]
         ):
-            q_out = q_in[3, 0, 0]
+            tmp_q = q_in[3, 0, 0]
         with horizontal(
             region[i_start - 1, j_start - 2], region[i_start - 2, j_end + 1]
         ):
-            q_out = q_in[2, 1, 0]
+            tmp_q = q_in[2, 1, 0]
         with horizontal(
             region[i_start - 3, j_start - 1], region[i_start - 1, j_end + 3]
         ):
-            q_out = q_in[3, -2, 0]
+            tmp_q = q_in[3, -2, 0]
         with horizontal(
             region[i_start - 2, j_start - 1], region[i_start - 1, j_end + 2]
         ):
-            q_out = q_in[2, -1, 0]
+            tmp_q = q_in[2, -1, 0]
         with horizontal(
             region[i_start - 1, j_start - 1], region[i_start - 1, j_end + 1]
         ):
-            q_out = q_in[1, 0, 0]
+            tmp_q = q_in[1, 0, 0]
         with horizontal(region[i_end + 1, j_start - 3], region[i_end + 3, j_end + 1]):
-            q_out = q_in[-3, 2, 0]
+            tmp_q = q_in[-3, 2, 0]
         with horizontal(region[i_end + 2, j_start - 3], region[i_end + 3, j_end + 2]):
-            q_out = q_in[-4, 1, 0]
+            tmp_q = q_in[-4, 1, 0]
         with horizontal(region[i_end + 3, j_start - 3], region[i_end + 3, j_end + 3]):
-            q_out = q_in[-5, 0, 0]
+            tmp_q = q_in[-5, 0, 0]
         with horizontal(region[i_end + 1, j_start - 2], region[i_end + 2, j_end + 1]):
-            q_out = q_in[-2, 1, 0]
+            tmp_q = q_in[-2, 1, 0]
         with horizontal(region[i_end + 2, j_start - 2], region[i_end + 2, j_end + 2]):
-            q_out = q_in[-3, 0, 0]
+            tmp_q = q_in[-3, 0, 0]
         with horizontal(region[i_end + 3, j_start - 2], region[i_end + 2, j_end + 3]):
-            q_out = q_in[-4, -1, 0]
+            tmp_q = q_in[-4, -1, 0]
         with horizontal(region[i_end + 1, j_start - 1], region[i_end + 1, j_end + 1]):
-            q_out = q_in[-1, 0, 0]
+            tmp_q = q_in[-1, 0, 0]
         with horizontal(region[i_end + 2, j_start - 1], region[i_end + 1, j_end + 2]):
-            q_out = q_in[-2, -1, 0]
+            tmp_q = q_in[-2, -1, 0]
         with horizontal(region[i_end + 3, j_start - 1], region[i_end + 1, j_end + 3]):
-            q_out = q_in[-3, -2, 0]
+            tmp_q = q_in[-3, -2, 0]
+    with computation(PARALLEL), interval(...):
+        q_in = tmp_q
 
 
 def copy_corners_xy_stencil_defn(
-    q_in: FloatField, q_out_x: FloatField, q_out_y: FloatField
+    q_in: FloatField,
+    #q_out_x: FloatField,
+    q_out_y: FloatField
 ):
     from __externals__ import i_end, i_start, j_end, j_start
 
     with computation(PARALLEL), interval(...):
-        q_out_x = q_in
-        q_out_y = q_in
+        tmp_q_out_x = q_in
+        tmp_q_out_y = q_in
         with horizontal(
             region[i_start - 3, j_start - 3], region[i_end + 3, j_start - 3]
         ):
-            q_out_x = q_in[0, 5, 0]
+            tmp_q_out_x = q_in[0, 5, 0]
         with horizontal(
             region[i_start - 2, j_start - 3], region[i_end + 3, j_start - 2]
         ):
-            q_out_x = q_in[-1, 4, 0]
+            tmp_q_out_x = q_in[-1, 4, 0]
         with horizontal(
             region[i_start - 1, j_start - 3], region[i_end + 3, j_start - 1]
         ):
-            q_out_x = q_in[-2, 3, 0]
+            tmp_q_out_x = q_in[-2, 3, 0]
         with horizontal(
             region[i_start - 3, j_start - 2], region[i_end + 2, j_start - 3]
         ):
-            q_out_x = q_in[1, 4, 0]
+            tmp_q_out_x = q_in[1, 4, 0]
         with horizontal(
             region[i_start - 2, j_start - 2], region[i_end + 2, j_start - 2]
         ):
-            q_out_x = q_in[0, 3, 0]
+            tmp_q_out_x = q_in[0, 3, 0]
         with horizontal(
             region[i_start - 1, j_start - 2], region[i_end + 2, j_start - 1]
         ):
-            q_out_x = q_in[-1, 2, 0]
+            tmp_q_out_x = q_in[-1, 2, 0]
         with horizontal(
             region[i_start - 3, j_start - 1], region[i_end + 1, j_start - 3]
         ):
-            q_out_x = q_in[2, 3, 0]
+            tmp_q_out_x = q_in[2, 3, 0]
         with horizontal(
             region[i_start - 2, j_start - 1], region[i_end + 1, j_start - 2]
         ):
-            q_out_x = q_in[1, 2, 0]
+            tmp_q_out_x = q_in[1, 2, 0]
         with horizontal(
             region[i_start - 1, j_start - 1], region[i_end + 1, j_start - 1]
         ):
-            q_out_x = q_in[0, 1, 0]
+            tmp_q_out_x = q_in[0, 1, 0]
+    with computation(PARALLEL), interval(...):
+        q_in = tmp_q_out_x
+    with computation(PARALLEL), interval(...):    
         with horizontal(region[i_start - 3, j_end + 1], region[i_end + 1, j_end + 3]):
-            q_out_x = q_in[2, -3, 0]
+            tmp_q_out_x = q_in[2, -3, 0]
         with horizontal(region[i_start - 2, j_end + 1], region[i_end + 1, j_end + 2]):
-            q_out_x = q_in[1, -2, 0]
+            tmp_q_out_x = q_in[1, -2, 0]
         with horizontal(region[i_start - 1, j_end + 1], region[i_end + 1, j_end + 1]):
-            q_out_x = q_in[0, -1, 0]
+            tmp_q_out_x = q_in[0, -1, 0]
         with horizontal(region[i_start - 3, j_end + 2], region[i_end + 2, j_end + 3]):
-            q_out_x = q_in[1, -4, 0]
+            tmp_q_out_x = q_in[1, -4, 0]
         with horizontal(region[i_start - 2, j_end + 2], region[i_end + 2, j_end + 2]):
-            q_out_x = q_in[0, -3, 0]
+            tmp_q_out_x = q_in[0, -3, 0]
         with horizontal(region[i_start - 1, j_end + 2], region[i_end + 2, j_end + 1]):
-            q_out_x = q_in[-1, -2, 0]
+            tmp_q_out_x = q_in[-1, -2, 0]
         with horizontal(region[i_start - 3, j_end + 3], region[i_end + 3, j_end + 3]):
-            q_out_x = q_in[0, -5, 0]
+            tmp_q_out_x = q_in[0, -5, 0]
         with horizontal(region[i_start - 2, j_end + 3], region[i_end + 3, j_end + 2]):
-            q_out_x = q_in[-1, -4, 0]
+            tmp_q_out_x = q_in[-1, -4, 0]
         with horizontal(region[i_start - 1, j_end + 3], region[i_end + 3, j_end + 1]):
-            q_out_x = q_in[-2, -3, 0]
+            tmp_q_out_x = q_in[-2, -3, 0]
         with horizontal(
             region[i_start - 3, j_start - 3], region[i_start - 3, j_end + 3]
         ):
