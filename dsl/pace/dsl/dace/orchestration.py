@@ -68,9 +68,7 @@ def _download_results_from_dace(
             gt4py_results = [
                 gt4py.storage.from_array(
                     r,
-                    #default_origin=(0, 0, 0),
                     backend=config.get_backend(),
-                    managed_memory=True,
                 )
                 for r in dace_result
             ]
@@ -78,8 +76,7 @@ def _download_results_from_dace(
             gt4py_results = [
                 gt4py.storage.from_array(
                     r,
-                    #default_origin=(0, 0, 0),
-                    backend=config.get_backend()
+                    backend=config.get_backend(),
                 )
                 for r in dace_result
             ]
@@ -163,9 +160,13 @@ def _build_sdfg(
         with DaCeProgress(config, "Split regions"):
             splittable_region_expansion(sdfg, verbose=True)
 
-        with DaCeProgress(config, "Expand (partial expansion)"):
-            from gt4py.cartesian.gtc.dace.partial_expansion import partially_expand     
-            partially_expand(sdfg, dims="K")
+        # Optional partial expansion
+        partial_expansion = os.getenv("PACE_PARTIAL_EXPANSION", "None")
+        if partial_expansion != "None":
+            with DaCeProgress(config, "Expand (partial expansion)"):
+                from gt4py.cartesian.gtc.dace.partial_expansion import partially_expand
+
+                partially_expand(sdfg, dims=partial_expansion)
 
         # Expand the stencil computation Library Nodes with the right expansion
         with DaCeProgress(config, "Expand"):
@@ -434,7 +435,6 @@ class _LazyComputepathMethod:
         """Return SDFGEnabledCallable wrapping original obj.method from cache.
         Update cache first if need be"""
         if (id(obj), id(self.func)) not in _LazyComputepathMethod.bound_callables:
-
             _LazyComputepathMethod.bound_callables[
                 (id(obj), id(self.func))
             ] = _LazyComputepathMethod.SDFGEnabledCallable(self, obj)
