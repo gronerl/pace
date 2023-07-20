@@ -328,7 +328,7 @@ def diffusive_damp(
         fy = fy + 0.5 * damp * (mass[0, -1, 0] + mass) * fy2
 
 
-def copy_corners_y_nord(q_in: FloatField, q_out: FloatField):
+def copy_corners_y_nord(q_in: FloatField):
     """
     Args:
         q_in (in):
@@ -336,6 +336,8 @@ def copy_corners_y_nord(q_in: FloatField, q_out: FloatField):
     """
     from __externals__ import i_end, i_start, j_end, j_start, nord0, nord1, nord2, nord3
 
+    with computation(PARALLEL), interval(...):
+        q_out = q_in
     with computation(PARALLEL), interval(0, 1):
         if __INLINED(nord0 > 0):
             with horizontal(
@@ -633,9 +635,11 @@ def copy_corners_y_nord(q_in: FloatField, q_out: FloatField):
                 region[i_end + 3, j_start - 1], region[i_end + 1, j_end + 3]
             ):
                 q_out = q_in[-3, -2, 0]
+    with computation(PARALLEL), interval(...):
+        q_in = q_out
 
 
-def copy_corners_x_nord(q_in: FloatField, q_out: FloatField):
+def copy_corners_x_nord(q_in: FloatField):
     """
     Args:
         q_in (in):
@@ -643,6 +647,8 @@ def copy_corners_x_nord(q_in: FloatField, q_out: FloatField):
     """
     from __externals__ import i_end, i_start, j_end, j_start, nord0, nord1, nord2, nord3
 
+    with computation(PARALLEL), interval(...):
+        q_out = q_in
     with computation(PARALLEL), interval(0, 1):
         if __INLINED(nord0 > 0):
             with horizontal(
@@ -940,7 +946,8 @@ def copy_corners_x_nord(q_in: FloatField, q_out: FloatField):
                 region[i_start - 1, j_end + 3], region[i_end + 3, j_end + 1]
             ):
                 q_out = q_in[-2, -3, 0]
-
+    with computation(PARALLEL), interval(...):
+        q_in = q_out
 
 class DelnFlux:
     """
@@ -1222,20 +1229,18 @@ class DelnFluxNoSG:
             d2 (out): higher-order damped version of q
             mass (unused): if given, apply d2 damping (does not use this as input)
         """
-
         if mass is None:
             self._d2_damp(q, d2, damp_c)
         else:
             self._copy_stencil_interval(q, d2)
 
-        self._copy_corners_x_nord(d2, d2)
+        self._copy_corners_x_nord(d2)
 
         self._fx_calc_stencil(d2, self._del6_v, fx2)
 
-        self._copy_corners_y_nord(d2, d2)
+        self._copy_corners_y_nord(d2)
 
         self._fy_calc_stencil(d2, self._del6_u, fy2)
-
         for n in range(self._nmax):
             self._d2_stencil[n](
                 fx2,
@@ -1244,7 +1249,7 @@ class DelnFluxNoSG:
                 d2,
             )
 
-            self._copy_corners_x_nord(d2, d2)
+            self._copy_corners_x_nord(d2)
 
             self._column_conditional_fx_calculation[n](
                 d2,
@@ -1252,7 +1257,7 @@ class DelnFluxNoSG:
                 fx2,
             )
 
-            self._copy_corners_y_nord(d2, d2)
+            self._copy_corners_y_nord(d2)
 
             self._column_conditional_fy_calculation[n](
                 d2,

@@ -201,6 +201,16 @@ def _build_sdfg(
 
         # Compile
         with DaCeProgress(config, "Codegen & compile"):
+            # rename threadlocals with globally unique name as workaround for bug in dace v0.14.1
+            repldicts: Dict[int, Dict[str, str]] = {}
+            for sd, name, array in sdfg.arrays_recursive():
+                if array.transient and array.storage == dace.StorageType.CPU_ThreadLocal:
+                    repldicts.setdefault(sd.sdfg_id, {})
+                    repldicts[sd.sdfg_id][name] = f"LOCAL_{sd.sdfg_id}_{name}"
+                    array.lifetime = dace.AllocationLifetime.Persistent
+            for sd in sdfg.all_sdfgs_recursive():
+                if sd.sdfg_id in repldicts:
+                    sd.replace_dict(repldicts[sd.sdfg_id])
             sdfg.compile()
         write_build_info(sdfg, config.layout, config.tile_resolution, config._backend)
 
