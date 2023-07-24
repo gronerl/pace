@@ -1,5 +1,4 @@
 import abc
-import logging
 from typing import List, Mapping, Optional, Sequence, Tuple, Union, cast
 
 import numpy as np
@@ -14,8 +13,6 @@ from .quantity import Quantity, QuantityHaloSpec, QuantityMetadata
 from .types import NumpyModule
 from .utils import device_synchronize
 
-
-logger = logging.getLogger("pace.util")
 
 try:
     import cupy
@@ -176,6 +173,7 @@ class Communicator(abc.ABC):
             origin=tuple([0 for dim in send_metadata.dims]),
             extent=global_extent,
             gt4py_backend=send_metadata.gt4py_backend,
+            allow_mismatch_float_precision=True,
         )
         return recv_quantity
 
@@ -188,6 +186,7 @@ class Communicator(abc.ABC):
             dims=send_metadata.dims,
             units=send_metadata.units,
             gt4py_backend=send_metadata.gt4py_backend,
+            allow_mismatch_float_precision=True,
         )
         return recv_quantity
 
@@ -267,7 +266,10 @@ class Communicator(abc.ABC):
             else:
                 gather_value = to_numpy(quantity.view[:], dtype=transfer_type)
                 gather_quantity = Quantity(
-                    data=gather_value, dims=quantity.dims, units=quantity.units
+                    data=gather_value,
+                    dims=quantity.dims,
+                    units=quantity.units,
+                    allow_mismatch_float_precision=True,
                 )
                 if recv_state is not None and name in recv_state:
                     tile_quantity = self.gather(
@@ -749,6 +751,7 @@ class CubedSphereCommunicator(Communicator):
             origin=(0,) + tuple([0 for dim in metadata.dims]),
             extent=global_extent,
             gt4py_backend=metadata.gt4py_backend,
+            allow_mismatch_float_precision=True,
         )
         return recv_quantity
 
@@ -768,5 +771,6 @@ class CubedSphereCommunicator(Communicator):
             dims=metadata.dims[1:],
             units=metadata.units,
             gt4py_backend=metadata.gt4py_backend,
+            allow_mismatch_float_precision=True,
         )
         return recv_quantity

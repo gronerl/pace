@@ -1,16 +1,110 @@
 import enum
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 import dace.config
+from dace.codegen.compiled_sdfg import CompiledSDFG
+from dace.frontend.python.parser import DaceProgram
 
+from pace.dsl.caches.cache_location import identify_code_path
+from pace.dsl.caches.codepath import FV3CodePath
 from pace.dsl.gt4py_utils import is_gpu_backend
-from pace.util.communicator import CubedSphereCommunicator
+from pace.util._optional_imports import cupy as cp
+from pace.util.communicator import CubedSphereCommunicator, CubedSpherePartitioner
 
 
 # This can be turned on to revert compilation for orchestration
 # in a rank-compile-itself more, instead of the distributed top-tile
 # mechanism.
 DEACTIVATE_DISTRIBUTED_DACE_COMPILE = False
+
+
+def _is_corner(rank: int, partitioner: CubedSpherePartitioner) -> bool:
+    if partitioner.tile.on_tile_bottom(rank):
+        if partitioner.tile.on_tile_left(rank):
+            return True
+        if partitioner.tile.on_tile_right(rank):
+            return True
+    if partitioner.tile.on_tile_top(rank):
+        if partitioner.tile.on_tile_left(rank):
+            return True
+        if partitioner.tile.on_tile_right(rank):
+            return True
+    return False
+
+
+def _smallest_rank_bottom(x: int, y: int, layout: Tuple[int, int]):
+    return y == 0 and x == 1
+
+
+def _smallest_rank_top(x: int, y: int, layout: Tuple[int, int]):
+    return y == layout[1] - 1 and x == 1
+
+
+def _smallest_rank_left(x: int, y: int, layout: Tuple[int, int]):
+    return x == 0 and y == 1
+
+
+def _smallest_rank_right(x: int, y: int, layout: Tuple[int, int]):
+    return x == layout[0] - 1 and y == 1
+
+
+def _smallest_rank_middle(x: int, y: int, layout: Tuple[int, int]):
+    return layout[0] > 1 and layout[1] > 1 and x == 1 and y == 1
+
+
+def _determine_compiling_ranks(
+    config: "DaceConfig",
+    partitioner: CubedSpherePartitioner,
+) -> bool:
+    """
+    We try to map every layout to a 3x3 layout which MPI ranks
+    looks like
+        6 7 8
+        3 4 5
+        0 1 2
+    Using the partitionner we find mapping of the given layout
+    to all of those. For example on 4x4 layout
+        12 13 14 15
+        8  9  10 11
+        4  5  6  7
+        0  1  2  3
+    therefore we map
+        0 -> 0
+        1 -> 1
+        2 -> NOT COMPILING
+        3 -> 2
+        4 -> 3
+        5 -> 4
+        6 -> NOT COMPILING
+        7 -> 5
+        8 -> NOT COMPILING
+        9 -> NOT COMPILING
+        10 -> NOT COMPILING
+        11 -> NOT COMPILING
+        12 -> 6
+        13 -> 7
+        14 -> NOT COMPILING
+        15 -> 8
+    """
+
+    # Tile 0 compiles
+    if partitioner.tile_index(config.my_rank) != 0:
+        return False
+
+    # Corners compile
+    if _is_corner(config.my_rank, partitioner):
+        return True
+
+    y, x = partitioner.tile.subtile_index(config.my_rank)
+
+    # If edge or center tile, we give way to the smallest rank
+    return (
+        _smallest_rank_left(x, y, config.layout)
+        or _smallest_rank_bottom(x, y, config.layout)
+        or _smallest_rank_middle(x, y, config.layout)
+        or _smallest_rank_right(x, y, config.layout)
+        or _smallest_rank_top(x, y, config.layout)
+    )
 
 
 class DaCeOrchestration(enum.Enum):
@@ -29,6 +123,28 @@ class DaCeOrchestration(enum.Enum):
     Run = 3
 
 
+class FrozenCompiledSDFG:
+    """
+    Cache transform args to allow direct execution of the CSDFG
+
+    Args:
+        csdfg: compiled SDFG, e.g. loaded .so
+        sdfg_args: transformed args to align for CSDFG direct execution
+
+    WARNING: No checks are done on arguments, any memory swap (free/realloc)
+    will lead to difficult to debug misbehavior
+    """
+
+    def __init__(
+        self, daceprog: DaceProgram, csdfg: CompiledSDFG, args, kwargs
+    ) -> None:
+        self.csdfg = csdfg
+        self.sdfg_args = daceprog._create_sdfg_args(csdfg.sdfg, args, kwargs)
+
+    def __call__(self):
+        return self.csdfg(**self.sdfg_args)
+
+
 class DaceConfig:
     def __init__(
         self,
@@ -38,6 +154,11 @@ class DaceConfig:
         tile_nz: int = 0,
         orchestration: Optional[DaCeOrchestration] = None,
     ):
+        # Recording SDFG loaded for fast re-access
+        # ToDo: DaceConfig becomes a bit more than a read-only config
+        #       with this. Should be refactor into a DaceExecutor carrying a config
+        self.loaded_precompiled_SDFG: Dict[DaceProgram, FrozenCompiledSDFG] = {}
+
         # Temporary. This is a bit too out of the ordinary for the common user.
         # We should refactor the architecture to allow for a `gtc:orchestrated:dace:X`
         # backend that would signify both the `CPU|GPU` split and the orchestration mode
@@ -52,6 +173,10 @@ class DaceConfig:
             self._orchestrate = DaCeOrchestration[fv3_dacemode_env_var]
         else:
             self._orchestrate = orchestration
+
+        # Debugging Dace orchestration deeper can be done by turning on `syncdebug`
+        # We control this Dace configuration below with our own override
+        dace_debug_env_var = os.getenv("PACE_DACE_DEBUG", "False") == "True"
 
         # Set the configuration of DaCe to a rigid & tested set of divergence
         # from the defaults when orchestrating
@@ -83,7 +208,11 @@ class DaceConfig:
                 "args",
                 value="-std=c++14 -Xcompiler -fPIC -O3 -Xcompiler -march=native",
             )
-            dace.config.Config.set("compiler", "cuda", "cuda_arch", value="60")
+
+            cuda_sm = 60
+            if cp:
+                cuda_sm = cp.cuda.Device(0).compute_capability
+            dace.config.Config.set("compiler", "cuda", "cuda_arch", value=f"{cuda_sm}")
             dace.config.Config.set(
                 "compiler", "cuda", "default_block_size", value="64,8,1"
             )
@@ -126,7 +255,9 @@ class DaceConfig:
             )
 
             # Enable to debug GPU failures
-            dace.config.Config.set("compiler", "cuda", "syncdebug", value=False)
+            dace.config.Config.set(
+                "compiler", "cuda", "syncdebug", value=dace_debug_env_var
+            )
 
         # attempt to kill the dace.conf to avoid confusion
         if dace.config.Config._cfg_filename:
@@ -139,24 +270,24 @@ class DaceConfig:
 
         self._backend = backend
         self.tile_resolution = [tile_nx, tile_nx, tile_nz]
-        from pace.dsl.dace.build import get_target_rank, set_distributed_caches
+        from pace.dsl.dace.build import set_distributed_caches
 
         # Distributed build required info
         if communicator:
             self.my_rank = communicator.rank
             self.rank_size = communicator.comm.Get_size()
-            if DEACTIVATE_DISTRIBUTED_DACE_COMPILE:
-                self.target_rank = communicator.rank
-            else:
-                self.target_rank = get_target_rank(
-                    self.my_rank, communicator.partitioner
-                )
+            self.code_path = identify_code_path(self.my_rank, communicator.partitioner)
             self.layout = communicator.partitioner.layout
+            self.do_compile = (
+                DEACTIVATE_DISTRIBUTED_DACE_COMPILE
+                or _determine_compiling_ranks(self, communicator.partitioner)
+            )
         else:
             self.my_rank = 0
             self.rank_size = 1
-            self.target_rank = 0
+            self.code_path = FV3CodePath.All
             self.layout = (1, 1)
+            self.do_compile = True
 
         set_distributed_caches(self)
 
