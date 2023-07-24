@@ -122,11 +122,6 @@ def _run_sdfg(daceprog: DaceProgram, config: DaceConfig, args, kwargs):
     return _download_results_from_dace(config, res, list(args) + list(kwargs.values()))
 
 
-def _partial_expansion(sdfg: dace.SDFG, config: DaceConfig, axis: str):
-    DaCeProgress.log("Partial expand", f"{sdfg.name}:{axis}")
-    partially_expand(sdfg, axis)
-
-
 def _build_sdfg(
     daceprog: DaceProgram, sdfg: dace.SDFG, config: DaceConfig, args, kwargs
 ):
@@ -319,8 +314,12 @@ def _parse_sdfg(
                 simplify=False,
             )
             if partial_expansion_axis:
-                sdfg.simplify(validate=False, verbose=True)
-                _partial_expansion(sdfg, config, partial_expansion_axis)
+                with DaCeProgress.log(
+                    "Partial expand (simplify first)",
+                    f"{sdfg.name}:{partial_expansion_axis}",
+                ):
+                    sdfg.simplify(validate=False, verbose=True)
+                    partially_expand(sdfg, partial_expansion_axis)
         return sdfg
     else:
         if os.path.isfile(sdfg_path):
