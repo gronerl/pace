@@ -2,6 +2,7 @@ import os
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
 
 import dace
+from gt4py.cartesian.gtc.dace.partial_expansion import partially_expand
 import gt4py.storage
 from dace import compiletime as DaceCompiletime
 from dace.dtypes import DeviceType as DaceDeviceType
@@ -121,6 +122,20 @@ def _run_sdfg(daceprog: DaceProgram, config: DaceConfig, args, kwargs):
     return _download_results_from_dace(config, res, list(args) + list(kwargs.values()))
 
 
+def _partial_expansion(sdfg: dace.SDFG, config: DaceConfig):
+    # TODO: the set shouldn't exist. The transformation should be
+    #       able to be tried N times and only apply once, skipping
+    #       other attempts in the "can_apply". A bug needs to be squashed
+    #       first.
+    already_applied = set()
+    for child_sdfg in sdfg.all_sdfgs_recursive():
+        if "C_SW" in sdfg.name:  # and sdfg.name not in already_applied:
+            already_applied.add(sdfg.name)
+            if not config.is_gpu_backend():
+                DaCeProgress.log("Partial expand", "C_SW:K")
+                partially_expand(child_sdfg, "K")
+
+
 def _build_sdfg(
     daceprog: DaceProgram, sdfg: dace.SDFG, config: DaceConfig, args, kwargs
 ):
@@ -160,13 +175,10 @@ def _build_sdfg(
         with DaCeProgress(config, "Split regions"):
             splittable_region_expansion(sdfg, verbose=True)
 
-        # Optional partial expansion
-        partial_expansion = os.getenv("PACE_PARTIAL_EXPANSION", "None")
-        if partial_expansion != "None":
-            with DaCeProgress(config, "Expand (partial expansion)"):
-                from gt4py.cartesian.gtc.dace.partial_expansion import partially_expand
-
-                partially_expand(sdfg, dims=partial_expansion)
+        # Partial expansion
+        with DaCeProgress(config, "Partial expansion"):
+            _partial_expansion(sdfg, config)
+            # partially_expand(sdfg, "K")
 
         # Expand the stencil computation Library Nodes with the right expansion
         with DaCeProgress(config, "Expand"):
@@ -204,7 +216,10 @@ def _build_sdfg(
             # rename threadlocals with globally unique name as workaround for bug in dace v0.14.1
             repldicts: Dict[int, Dict[str, str]] = {}
             for sd, name, array in sdfg.arrays_recursive():
-                if array.transient and array.storage == dace.StorageType.CPU_ThreadLocal:
+                if (
+                    array.transient
+                    and array.storage == dace.StorageType.CPU_ThreadLocal
+                ):
                     repldicts.setdefault(sd.sdfg_id, {})
                     repldicts[sd.sdfg_id][name] = f"LOCAL_{sd.sdfg_id}_{name}"
                     array.lifetime = dace.AllocationLifetime.Persistent
@@ -393,11 +408,14 @@ class _LazyComputepathMethod:
     bound_callables: Dict[Tuple[int, int], "SDFGEnabledCallable"] = dict()
 
     class SDFGEnabledCallable(SDFGConvertible):
-        def __init__(self, lazy_method: "_LazyComputepathMethod", obj_to_bind):
+        def __init__(
+            self, lazy_method: "_LazyComputepathMethod", obj_to_bind, pre_expand=None
+        ):
             methodwrapper = dace.method(lazy_method.func)
             self.obj_to_bind = obj_to_bind
             self.lazy_method = lazy_method
             self.daceprog: DaceProgram = methodwrapper.__get__(obj_to_bind)
+            self.pre_expand = pre_expand
 
         @property
         def global_vars(self):
@@ -424,7 +442,11 @@ class _LazyComputepathMethod:
             )
 
         def __sdfg__(self, *args, **kwargs):
-            return _parse_sdfg(self.daceprog, self.lazy_method.config, *args, **kwargs)
+            parsed_sdfg = _parse_sdfg(
+                self.daceprog, self.lazy_method.config, *args, **kwargs
+            )
+            parsed_sdfg.pre_expand = self.pre_expand
+            return parsed_sdfg
 
         def __sdfg_closure__(self, reevaluate=None):
             return self.daceprog.__sdfg_closure__(reevaluate)
@@ -441,13 +463,15 @@ class _LazyComputepathMethod:
         self.func = func
         self.config = config
 
-    def __get__(self, obj, objtype=None) -> SDFGEnabledCallable:
+    def __get__(self, obj, objtype=None, pre_expand=None) -> SDFGEnabledCallable:
         """Return SDFGEnabledCallable wrapping original obj.method from cache.
         Update cache first if need be"""
         if (id(obj), id(self.func)) not in _LazyComputepathMethod.bound_callables:
             _LazyComputepathMethod.bound_callables[
                 (id(obj), id(self.func))
-            ] = _LazyComputepathMethod.SDFGEnabledCallable(self, obj)
+            ] = _LazyComputepathMethod.SDFGEnabledCallable(
+                self, obj, pre_expand=pre_expand
+            )
 
         return _LazyComputepathMethod.bound_callables[(id(obj), id(self.func))]
 
@@ -458,6 +482,7 @@ def orchestrate(
     config: DaceConfig,
     method_to_orchestrate: str = "__call__",
     dace_compiletime_args: Optional[Sequence[str]] = None,
+    pre_expand: Optional[str] = None,
 ):
     """
     Orchestrate a method of an object with DaCe.
@@ -485,7 +510,9 @@ def orchestrate(
 
             # Build DaCe orchestrated wrapper
             # This is a JIT object, e.g. DaCe compilation will happen on call
-            wrapped = _LazyComputepathMethod(func, config).__get__(obj)
+            wrapped = _LazyComputepathMethod(func, config).__get__(
+                obj, pre_expand=pre_expand
+            )
 
             if method_to_orchestrate == "__call__":
                 # Grab the function from the type of the child class
