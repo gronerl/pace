@@ -498,7 +498,13 @@ class CGridShallowWaterDynamics:
         grid_type: int,
         nord: int,
     ):
-        orchestrate(obj=self, config=stencil_factory.config.dace_config)
+        orchestrate(
+            obj=self,
+            config=stencil_factory.config.dace_config,
+            partial_expansion_axis=(
+                "K" if not stencil_factory.config.is_gpu_backend() else None
+            ),
+        )
         self.grid_data = grid_data
         self._dord4 = True
         self._fC = self.grid_data.fC
@@ -695,13 +701,13 @@ class CGridShallowWaterDynamics:
         )
 
         # TODO(eddied): We pass the same fields 2x to avoid GTC validation errors
-        self._fill_corners_x_delp_pt_w_stencil(delp, pt, w)#, delp, pt, w)
+        self._fill_corners_x_delp_pt_w_stencil(delp, pt, w)  # , delp, pt, w)
         # TODO: why is there only a "x" version of this? Is the "y" verison folded
         # into the next routine?
         self._compute_nonhydro_fluxes_x_stencil(
             delp, pt, ut, w, self._tmp_fx, self._tmp_fx1, self._tmp_fx2
         )
-        self._fill_corners_y_delp_pt_w_stencil(delp, pt, w)#, delp, pt, w)
+        self._fill_corners_y_delp_pt_w_stencil(delp, pt, w)  # , delp, pt, w)
         self._transportdelp_updatevorticity_and_ke(
             delp,
             pt,

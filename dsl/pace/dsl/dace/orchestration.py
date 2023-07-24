@@ -122,18 +122,9 @@ def _run_sdfg(daceprog: DaceProgram, config: DaceConfig, args, kwargs):
     return _download_results_from_dace(config, res, list(args) + list(kwargs.values()))
 
 
-def _partial_expansion(sdfg: dace.SDFG, config: DaceConfig):
-    # TODO: the set shouldn't exist. The transformation should be
-    #       able to be tried N times and only apply once, skipping
-    #       other attempts in the "can_apply". A bug needs to be squashed
-    #       first.
-    already_applied = set()
-    for child_sdfg in sdfg.all_sdfgs_recursive():
-        if "C_SW" in sdfg.name:  # and sdfg.name not in already_applied:
-            already_applied.add(sdfg.name)
-            if not config.is_gpu_backend():
-                DaCeProgress.log("Partial expand", "C_SW:K")
-                partially_expand(child_sdfg, "K")
+def _partial_expansion(sdfg: dace.SDFG, config: DaceConfig, axis: str):
+    DaCeProgress.log("Partial expand", f"{sdfg.name}:{axis}")
+    partially_expand(sdfg, axis)
 
 
 def _build_sdfg(
@@ -175,11 +166,6 @@ def _build_sdfg(
         with DaCeProgress(config, "Split regions"):
             splittable_region_expansion(sdfg, verbose=True)
 
-        # Partial expansion
-        with DaCeProgress(config, "Partial expansion"):
-            _partial_expansion(sdfg, config)
-            # partially_expand(sdfg, "K")
-
         # Expand the stencil computation Library Nodes with the right expansion
         with DaCeProgress(config, "Expand"):
             sdfg.expand_library_nodes()
@@ -213,7 +199,8 @@ def _build_sdfg(
 
         # Compile
         with DaCeProgress(config, "Codegen & compile"):
-            # rename threadlocals with globally unique name as workaround for bug in dace v0.14.1
+            # rename threadlocals with globally unique name as workaround
+            # for bug in dace v0.14.1
             repldicts: Dict[int, Dict[str, str]] = {}
             for sd, name, array in sdfg.arrays_recursive():
                 if (
@@ -302,6 +289,7 @@ def _call_sdfg(
 def _parse_sdfg(
     daceprog: DaceProgram,
     config: DaceConfig,
+    partial_expansion_axis: Union[str, None],
     *args,
     **kwargs,
 ) -> Optional[dace.SDFG]:
@@ -330,6 +318,9 @@ def _parse_sdfg(
                 save=False,
                 simplify=False,
             )
+            if partial_expansion_axis:
+                sdfg.simplify(validate=False, verbose=True)
+                _partial_expansion(sdfg, config, partial_expansion_axis)
         return sdfg
     else:
         if os.path.isfile(sdfg_path):
@@ -351,17 +342,24 @@ class _LazyComputepathFunction(SDFGConvertible):
                    that will be compiled but not regenerated.
     """
 
-    def __init__(self, func: Callable, config: DaceConfig):
+    def __init__(
+        self,
+        func: Callable,
+        config: DaceConfig,
+        partial_expansion_axis: Optional[str] = None,
+    ):
         self.func = func
         self.config = config
         self.daceprog: DaceProgram = dace.program(self.func)
         self._sdfg = None
+        self.partial_expansion_axis = partial_expansion_axis
 
     def __call__(self, *args, **kwargs):
         assert self.config.is_dace_orchestrated()
         sdfg = _parse_sdfg(
             self.daceprog,
             self.config,
+            self.partial_expansion_axis,
             *args,
             **kwargs,
         )
@@ -409,13 +407,16 @@ class _LazyComputepathMethod:
 
     class SDFGEnabledCallable(SDFGConvertible):
         def __init__(
-            self, lazy_method: "_LazyComputepathMethod", obj_to_bind, pre_expand=None
+            self,
+            lazy_method: "_LazyComputepathMethod",
+            obj_to_bind,
+            partial_expansion_axis=None,
         ):
             methodwrapper = dace.method(lazy_method.func)
             self.obj_to_bind = obj_to_bind
             self.lazy_method = lazy_method
             self.daceprog: DaceProgram = methodwrapper.__get__(obj_to_bind)
-            self.pre_expand = pre_expand
+            self.partial_expansion_axis = partial_expansion_axis
 
         @property
         def global_vars(self):
@@ -430,6 +431,7 @@ class _LazyComputepathMethod:
             sdfg = _parse_sdfg(
                 self.daceprog,
                 self.lazy_method.config,
+                self.partial_expansion_axis,
                 *args,
                 **kwargs,
             )
@@ -442,11 +444,13 @@ class _LazyComputepathMethod:
             )
 
         def __sdfg__(self, *args, **kwargs):
-            parsed_sdfg = _parse_sdfg(
-                self.daceprog, self.lazy_method.config, *args, **kwargs
+            return _parse_sdfg(
+                self.daceprog,
+                self.lazy_method.config,
+                self.partial_expansion_axis,
+                *args,
+                **kwargs,
             )
-            parsed_sdfg.pre_expand = self.pre_expand
-            return parsed_sdfg
 
         def __sdfg_closure__(self, reevaluate=None):
             return self.daceprog.__sdfg_closure__(reevaluate)
@@ -463,14 +467,19 @@ class _LazyComputepathMethod:
         self.func = func
         self.config = config
 
-    def __get__(self, obj, objtype=None, pre_expand=None) -> SDFGEnabledCallable:
+    def __get__(
+        self,
+        obj,
+        objtype=None,
+        partial_expansion_axis=None,
+    ) -> SDFGEnabledCallable:
         """Return SDFGEnabledCallable wrapping original obj.method from cache.
         Update cache first if need be"""
         if (id(obj), id(self.func)) not in _LazyComputepathMethod.bound_callables:
             _LazyComputepathMethod.bound_callables[
                 (id(obj), id(self.func))
             ] = _LazyComputepathMethod.SDFGEnabledCallable(
-                self, obj, pre_expand=pre_expand
+                self, obj, partial_expansion_axis=partial_expansion_axis
             )
 
         return _LazyComputepathMethod.bound_callables[(id(obj), id(self.func))]
@@ -482,7 +491,7 @@ def orchestrate(
     config: DaceConfig,
     method_to_orchestrate: str = "__call__",
     dace_compiletime_args: Optional[Sequence[str]] = None,
-    pre_expand: Optional[str] = None,
+    partial_expansion_axis: Optional[str] = None,
 ):
     """
     Orchestrate a method of an object with DaCe.
@@ -511,7 +520,7 @@ def orchestrate(
             # Build DaCe orchestrated wrapper
             # This is a JIT object, e.g. DaCe compilation will happen on call
             wrapped = _LazyComputepathMethod(func, config).__get__(
-                obj, pre_expand=pre_expand
+                obj, partial_expansion_axis=partial_expansion_axis
             )
 
             if method_to_orchestrate == "__call__":
@@ -573,6 +582,7 @@ def orchestrate(
 def orchestrate_function(
     config: DaceConfig = None,
     dace_compiletime_args: Optional[Sequence[str]] = None,
+    partial_expansion_axis: Optional[str] = None,
 ) -> Union[Callable[..., Any], _LazyComputepathFunction]:
     """
     Decorator orchestrating a method of an object with DaCe.
