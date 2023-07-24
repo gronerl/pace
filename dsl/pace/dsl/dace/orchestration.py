@@ -313,8 +313,9 @@ def _parse_sdfg(
                 simplify=False,
             )
             if partial_expansion_axis:
-                with DaCeProgress.log(
-                    "Partial expand (simplify first)",
+                with DaCeProgress(
+                    config,
+                    "Partial expand (simplify first) "
                     f"{sdfg.name}:{partial_expansion_axis}",
                 ):
                     sdfg.simplify(validate=False, verbose=True)
