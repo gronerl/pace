@@ -502,7 +502,7 @@ class CGridShallowWaterDynamics:
             obj=self,
             config=stencil_factory.config.dace_config,
             partial_expansion_axis=(
-                "K" if not stencil_factory.config.is_gpu_backend() else None
+                "K" if not stencil_factory.config.is_gpu_backend else None
             ),
         )
         self.grid_data = grid_data
